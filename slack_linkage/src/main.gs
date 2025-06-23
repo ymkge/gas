@@ -1,6 +1,10 @@
 // ====== 設定項目 ======
 // 監視対象のスプレッドシート名を設定してください
-const SHEET_NAME = '案件管理台帳'; 
+const SHEET_NAME = '案件管理台帳'; // 例: '案件依頼台帳'
+// 通知ステータスを記録する列（A=1, B=2, C=3, D=4, E=5）
+const STATUS_COLUMN_INDEX = 5; 
+// 通知完了後にステータス列に書き込むテキスト
+const NOTIFIED_TEXT = '通知済み';
 // ====================
 
 /**
@@ -17,28 +21,42 @@ function checkAndNotifySlack(e) {
       return;
     }
 
-    // 編集された列がA列からD列（1-4）の範囲外なら無視する
+    const editedRow = range.getRow();
     const editedCol = range.getColumn();
+
+    // ヘッダー行(1行目)や、通知ステータス列自身の編集は無視する
+    if (editedRow === 1 || editedCol === STATUS_COLUMN_INDEX) {
+      return;
+    }
+
+    // A列からD列（依頼内容）以外の編集は無視する
     if (editedCol > 4) {
       return;
     }
 
-    // 編集された行番号を取得
-    const editedRow = range.getRow();
-    // ヘッダー行（1行目）の編集は無視する
-    if (editedRow === 1) {
+    // 編集された行のA列からステータス列までのデータを取得
+    const rowData = sheet.getRange(editedRow, 1, 1, STATUS_COLUMN_INDEX).getValues()[0];
+    
+    // ステータス列の値を取得
+    const notificationStatus = rowData[STATUS_COLUMN_INDEX - 1];
+
+    // 既に通知済みの場合は何もしない
+    if (notificationStatus === NOTIFIED_TEXT) {
       return;
     }
 
-    // 編集された行のA列からD列の値を取得
-    const rowValues = sheet.getRange(editedRow, 1, 1, 4).getValues()[0];
+    // A, B, C, D列の値を取得
+    const entryDateValue = rowData[0];
+    const summary = rowData[1];
+    const requester = rowData[2];
+    const desiredDateValue = rowData[3];
 
     // A, B, C, D列のいずれかが空欄の場合は処理を中断
-    if (rowValues.some(cell => cell === '')) {
+    if (entryDateValue === '' || summary === '' || requester === '' || desiredDateValue === '') {
       return;
     }
 
-    // すべてのセルが埋まった場合のみ、以下の処理を実行
+    // すべてのセルが埋まり、かつ未通知の場合のみ、以下の処理を実行
     
     // スクリプトプロパティからWebhook URLを取得
     const slackWebhookUrl = PropertiesService.getScriptProperties().getProperty('SLACK_WEBHOOK_URL');
@@ -46,12 +64,10 @@ function checkAndNotifySlack(e) {
       Logger.log('エラー: SlackのWebhook URLがスクリプトプロパティに設定されていません。');
       return;
     }
-
-    // データを取得して整形
-    const entryDate = formatDate(rowValues[0]); // A列: エントリー日付
-    const summary = rowValues[1];             // B列: 依頼概要
-    const requester = rowValues[2];           // C列: 依頼者
-    const desiredDate = formatDate(rowValues[3]); // D列: 対応希望日
+    
+    // 日付をフォーマット
+    const entryDate = formatDate(entryDateValue);
+    const desiredDate = formatDate(desiredDateValue);
 
     // Slackに送信するメッセージを作成
     const message = `案件依頼台帳に以下のエントリーがされました
@@ -60,7 +76,7 @@ function checkAndNotifySlack(e) {
 - 依頼者: ${requester}
 - 対応希望日: ${desiredDate}`;
 
-    // Slackに送信するためのペイロード（データ）を作成
+    // Slackに送信するためのペイロードを作成
     const payload = {
       text: message,
     };
@@ -73,6 +89,9 @@ function checkAndNotifySlack(e) {
     };
     
     UrlFetchApp.fetch(slackWebhookUrl, options);
+
+    // 通知が成功したら、ステータス列に「通知済み」と書き込む
+    sheet.getRange(editedRow, STATUS_COLUMN_INDEX).setValue(NOTIFIED_TEXT);
 
   } catch (error) {
     // エラーが発生した場合にログを出力
@@ -87,6 +106,7 @@ function checkAndNotifySlack(e) {
  */
 function formatDate(dateValue) {
   if (dateValue instanceof Date) {
+    // タイムゾーンは日本の'JST'を指定
     return Utilities.formatDate(dateValue, 'JST', 'yyyy/MM/dd');
   }
   return dateValue; // 日付オブジェクトでない場合はそのまま返す
